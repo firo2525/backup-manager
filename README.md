@@ -60,8 +60,10 @@ Dateiversion kann gezielt wiederhergestellt werden — ganz ohne Cloud, ohne Abo
 1. Die neueste `BackupManager-Setup-*.exe` von der **[Releases-Seite](../../releases/latest)** herunterladen.
 2. Starten. Windows SmartScreen warnt bei unsignierten Programmen – auf **„Weitere Informationen“ →
    „Trotzdem ausführen“** klicken.
-3. Der Installer kopiert das Programm nach `C:\Program Files\BackupManager`, installiert bei Bedarf automatisch
-   Python 3.12 sowie alle benötigten Pakete und legt Verknüpfungen an.
+3. Der Installer kopiert das Programm standardmäßig nach `%LOCALAPPDATA%\Programs\BackupManager` (pro
+   Benutzer, **keine Administratorrechte nötig**), installiert bei Bedarf automatisch Python 3.12 sowie alle
+   benötigten Pakete und legt Verknüpfungen an. Über „Ändern …“ lässt sich auch ein anderer Ordner wählen,
+   z. B. `C:\Program Files\BackupManager` für alle Benutzer (dafür fragt Windows nach Administratorrechten).
 
    Ohne Fenster: `BackupManager-Setup.exe /S` (weitere Schalter: `/D=Ordner` `/nodesktop` `/nopin` `/nostart`).
 
@@ -121,7 +123,8 @@ ist damit selbst wieder rückgängig machbar.
 
 | Installationsart | Programm | Konfiguration, Logs, Snapshots |
 |---|---|---|
-| Installer (`C:\Program Files`) | `C:\Program Files\BackupManager` | `%LOCALAPPDATA%\BackupManager` |
+| Installer (Standard, pro Benutzer) | `%LOCALAPPDATA%\Programs\BackupManager` | im selben Ordner |
+| Installer, Ordner `C:\Program Files\...` gewählt | dort | `%LOCALAPPDATA%\BackupManager` |
 | Portabel | Dein gewählter Ordner | im selben Ordner (`config`, `logs`, `versions`) |
 
 Der Snapshot-Ordner lässt sich jederzeit unter **Einstellungen → Speicherort der Snapshots** ändern; vorhandene

@@ -1,4 +1,4 @@
-BACKUP MANAGER 2.1 – entwickelt von Firat Öztürk · https://konklave.info
+BACKUP MANAGER 2.1.2 – entwickelt von Firat Öztürk · https://konklave.info
 =========================================================================
 
 Sichert Ordner und Dateien inkrementell in ein Ziel (z. B. externe Festplatte).
@@ -11,9 +11,12 @@ regelmäßig automatisch.
 INSTALLATION
 ------------
 Variante A – Installationsprogramm (empfohlen, auch für andere PCs)
-  dist\BackupManager-Setup-2.1.exe starten.
-  - Installiert nach C:\Program Files\BackupManager (Explorer zeigt „Programme“).
-    Administratorrechte werden erst beim Klick auf „Installieren“ angefragt.
+  dist\BackupManager-Setup-2.1.2.exe starten.
+  - Installiert standardmäßig pro Benutzer nach
+    %LOCALAPPDATA%\Programs\BackupManager - dafür sind KEINE Administrator-
+    rechte nötig. Über "Ändern..." lässt sich auch ein anderer Ordner wählen,
+    z. B. C:\Program Files\BackupManager für alle Benutzer (dafür fragt
+    Windows dann nach Administratorrechten).
   - Kopiert die Programmdateien und führt install.bat aus: Python wird bei Bedarf
     automatisch installiert (winget bzw. python.org mit Signaturprüfung),
     danach alle Pakete in einer eigenen Umgebung (.venv).
@@ -21,7 +24,7 @@ Variante A – Installationsprogramm (empfohlen, auch für andere PCs)
     versucht, das Programm an die Taskleiste anzuheften. Windows 11 erlaubt das
     Programmen nicht – dann zeigt der Installer, wie es per Rechtsklick geht.
   - Trägt sich unter Einstellungen → Apps ein (Deinstallation dort möglich).
-  - Ohne Fenster: BackupManager-Setup-2.1.exe /S   (weitere Optionen:
+  - Ohne Fenster: BackupManager-Setup-2.1.2.exe /S   (weitere Optionen:
     /D=Ordner  /nodesktop  /nopin  /nostart)
 
 Variante B – portabel (Ordner kopieren)

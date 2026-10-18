@@ -1,7 +1,8 @@
 """Backup Manager – Installer / Deinstaller.
 
 Wird mit PyInstaller zu "BackupManager-Setup.exe" gebaut (siehe build_installer.py). Ablauf:
-  1. Programmdateien (payload.zip) nach C:\\Program Files\\BackupManager kopieren
+  1. Programmdateien (payload.zip) nach %LOCALAPPDATA%\\Programs\\BackupManager kopieren (Standard; braucht
+     keine Administratorrechte - "Ändern..." erlaubt z. B. auch C:\\Program Files für alle Benutzer)
   2. install.bat ausführen → Python + Pakete automatisch installieren
   3. Verknüpfungen (Desktop, Startmenü, Taskleiste versuchen), Eintrag unter „Apps“ mit Deinstallation
 
@@ -37,8 +38,12 @@ UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\BackupMana
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 LNK_NAME = APP_NAME + ".lnk"
 PROGRAM_FILES = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles") or r"C:\Program Files"
-DEFAULT_DIR = os.path.join(PROGRAM_FILES, "BackupManager")
 USER_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "Programs", "BackupManager")
+SYSTEM_DIR = os.path.join(PROGRAM_FILES, "BackupManager")
+# Standard: Installation pro Benutzer unter %LOCALAPPDATA% - braucht keine Administratorrechte und damit
+# auch keinen UAC-Dialog beim Klick auf "Installieren" (frueher dort eine Fehlerquelle). Wer unbedingt
+# systemweit nach C:\Program Files installieren will, kann das weiterhin ueber "Aendern..." waehlen.
+DEFAULT_DIR = USER_DIR
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "BackupManager")
 LOG_FILE = os.path.join(tempfile.gettempdir(), "BackupManager-Setup.log")
 NO_WINDOW = 0x08000000
@@ -111,12 +116,30 @@ def can_write(path):
 
 
 def relaunch_elevated(args):
-    """Startet den Installer mit Administratorrechten neu (UAC). True, wenn gestartet."""
+    """Startet den Installer mit Administratorrechten neu (UAC). True, wenn gestartet.
+    Wird aus einem Hintergrund-Thread aufgerufen (siehe SetupWindow.request_elevation) - COM wird dafuer
+    auf diesem Thread explizit initialisiert, da ShellExecuteW("runas", ...) intern auf COM/RPC zur
+    Rechteerhoehung (AppInfo-Dienst) zurueckgreift und ohne Initialisierung auf fremden Threads haengen
+    oder fehlschlagen kann."""
     if FROZEN:
         exe, params = sys.executable, subprocess.list2cmdline(args)
     else:
         exe, params = sys.executable, subprocess.list2cmdline([os.path.abspath(__file__)] + args)
-    rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+    com_ready = False
+    try:
+        import pythoncom
+        pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+        com_ready = True
+    except Exception:
+        pass
+    try:
+        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, 1)
+    finally:
+        if com_ready:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
     return rc > 32
 
 
