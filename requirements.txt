@@ -1,0 +1,7 @@
+# Laufzeit-Abhaengigkeiten des Backup Managers (werden von install.bat installiert/aktualisiert)
+customtkinter>=5.2.2,<6
+darkdetect>=0.8
+packaging>=23.0
+pillow>=10.0
+pystray>=0.19
+pywin32>=306; sys_platform == "win32"

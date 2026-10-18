@@ -1,0 +1,14 @@
+{
+    "Beispiel": {
+        "sources": [
+            "D:/Projekte/Website",
+            "D:/Projekte/Dokumente/wichtige_datei.docx"
+        ],
+        "target": "E:/Backup/Beispiel",
+        "hdd_mode": false,
+        "excludes": [".git", "node_modules", "__pycache__", "*.tmp"],
+        "snapshots": true,
+        "auto_sync": true,
+        "last_run": null
+    }
+}

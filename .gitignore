@@ -1,0 +1,31 @@
+# Laufzeitumgebung (von install.bat erzeugt)
+.venv/
+__pycache__/
+*.pyc
+
+# Persönliche Daten (Profile, Quellen/Ziel, Einstellungen, Sicherungen davon)
+config/*.json
+config/*.txt
+config/backups/
+!config/profiles.example.json
+
+# Snapshots und Logs (Nutzdaten, nicht Teil des Quellcodes)
+versions/
+logs/
+
+# Build-/Installer-Artefakte (werden lokal erzeugt, nicht versioniert)
+dist/
+build/
+installer/build/
+installer/.build-venv/
+*.spec
+
+# Tests
+.pytest_cache/
+.coverage
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
