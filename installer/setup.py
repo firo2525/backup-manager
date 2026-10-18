@@ -10,6 +10,7 @@ Parameter:
   /S              ohne Oberfläche (Protokoll: %TEMP%\\BackupManager-Setup.log)
   /D=<Ordner>     Installationsordner
   /nodesktop /nopin /nostart
+  /update         Ein-Klick-Update aus dem Programm: wie /S, Verknüpfungen bleiben wie sie sind, danach Neustart
   /uninstall [/purge]   entfernen (/purge löscht auch Einstellungen, Logs und Snapshots)
 """
 import ctypes
@@ -53,11 +54,14 @@ NO_WINDOW = 0x08000000
 
 def parse_args(argv):
     o = {"silent": False, "dir": None, "desktop": True, "pin": True, "start": True,
-         "uninstall": False, "purge": False, "go": False, "elevated": False}
+         "uninstall": False, "purge": False, "go": False, "elevated": False, "update": False}
     for a in argv:
         al = a.lower()
         if al in ("/s", "/silent"):
             o["silent"] = True
+        elif al == "/update":
+            o["update"] = o["silent"] = True
+            o["pin"] = False
         elif al.startswith("/d="):
             o["dir"] = a[3:].strip().strip('"')
         elif al == "/nodesktop":
@@ -86,7 +90,9 @@ def build_args(o, target, extra=()):
         args.append("/uninstall")
     if o["purge"]:
         args.append("/purge")
-    if o["silent"]:
+    if o["update"]:
+        args.append("/update")
+    elif o["silent"]:
         args.append("/S")
     return args + list(extra)
 
@@ -273,7 +279,9 @@ class InstallJob:
     def create_shortcuts(self):
         py = os.path.join(self.target, ".venv", "Scripts", "python.exe")
         args = [py, os.path.join(self.target, "engine", "start.py"), "--create-shortcuts"]
-        if not self.opts["desktop"]:
+        if self.opts.get("update"):
+            args.append("--keep-desktop")  # Desktop-Verknüpfung nur erneuern, wenn es schon eine gibt
+        elif not self.opts["desktop"]:
             args.append("--no-desktop")
         if self.opts["pin"]:
             args.append("--pin")
@@ -396,6 +404,8 @@ def run_silent(opts, target):
     ok = not any(x.startswith("== ERROR") for x in lines)
     if ok and opts["uninstall"]:
         schedule_folder_removal(target)
+    if ok and opts.get("update") and opts["start"]:
+        start_app(target, job.result.get("shortcut"))
     return 0 if ok else 1
 
 

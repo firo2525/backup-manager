@@ -138,6 +138,10 @@ def desktop_dir(all_users=False):
     return _folder(0x0019 if all_users else 0x0010)  # CSIDL_(COMMON_)DESKTOPDIRECTORY
 
 
+def has_desktop_shortcut():
+    return any(os.path.exists(os.path.join(desktop_dir(all_users), LNK_NAME)) for all_users in (False, True))
+
+
 def programs_dir(all_users=False):
     return _folder(0x0017 if all_users else 0x0002)  # CSIDL_(COMMON_)PROGRAMS (Startmenü\Programme)
 

@@ -60,6 +60,9 @@ DEFAULT_SETTINGS = {
     "close_to_tray": False,     # Schließen-Knopf minimiert in den Infobereich
     "autostart_asked": False,   # Frage beim ersten Start schon gestellt?
     "tray_hint_shown": False,
+    "update_check": True,       # einmal täglich auf GitHub nach einer neuen Version sehen
+    "last_update_check": None,
+    "skipped_version": None,    # „Diese Version überspringen“
 }
 
 DEFAULT_PROFILE = {

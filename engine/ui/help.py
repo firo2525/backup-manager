@@ -26,14 +26,15 @@ HELP = {
                   "die automatische Synchronisierung."),
     "stat_sources": ("Quellen",
                      "Anzahl der Ordner und Dateien, die in diesem Profil gesichert werden. Rot markiert sind "
-                     "Quellen, die gerade nicht gefunden werden (umbenannt, gelöscht oder Laufwerk nicht verbunden)."),
+                     "Quellen, die gerade nicht gefunden werden (umbenannt, gelöscht, Laufwerk nicht verbunden oder "
+                     "NAS nicht erreichbar)."),
     "stat_snapshots": ("Snapshots",
                        "Anzahl der aufbewahrten Backup-Läufe dieses Profils und der Speicherplatz, den die darin "
                        "gesicherten alten Dateiversionen belegen. Ein Snapshot entsteht nur, wenn ein Lauf "
                        "tatsächlich etwas geändert hat."),
     "stat_drive": ("Ziel-Laufwerk",
-                   "Freier Speicherplatz auf dem Laufwerk, auf das gesichert wird. Grün = genug Platz, "
-                   "Orange = unter 15 % frei, Rot = fast voll oder nicht verbunden."),
+                   "Freier Speicherplatz auf dem Laufwerk bzw. der Netzwerkfreigabe, auf die gesichert wird. "
+                   "Grün = genug Platz, Orange = unter 15 % frei, Rot = fast voll oder nicht erreichbar."),
     "recent": ("Letzte Snapshots",
                "Die neuesten Backup-Läufe dieses Profils. Ein Klick öffnet den Lauf in der Snapshot-Liste, wo du "
                "die enthaltenen Dateien ansehen oder den Lauf zurücksetzen kannst."),
@@ -51,14 +52,25 @@ HELP = {
     # --- Quellen & Ziel
     "sources": ("Quellen",
                 "Ordner und Dateien, die gesichert werden. Ein Ordner wird im Ziel als Unterordner mit seinem Namen "
-                "angelegt (D:\\Projekte\\Web → Ziel\\Web), eine einzelne Datei landet direkt im Ziel.\n\n"
+                "angelegt (D:\\Projekte\\Web → Ziel\\Web), eine einzelne Datei landet direkt im Ziel. Auch Ordner "
+                "auf einem NAS (\\\\NAS\\Fotos) können Quelle sein. Systemordner von NAS und Windows (z. B. "
+                "#snapshot, #recycle, @eaDir, @Recently-Snapshot, .zfs, $RECYCLE.BIN) werden automatisch "
+                "übersprungen – Snapshot-Ordner enthalten sonst komplette Kopien der Freigabe.\n\n"
                 "„Inhalt auswählen“ zeigt den Inhalt eines Ordners an, damit du gezielt nur bestimmte Unterordner "
                 "oder Dateien hinzufügen kannst.\n\n"
                 "Haben zwei Quellen denselben Namen, würden sie im Ziel im selben Ordner landen – darauf weist "
                 "dich der Bereich „Hinweise“ hin."),
     "target": ("Ziel",
-               "Der Ordner, in den gesichert wird – z. B. auf einer externen Festplatte oder einem zweiten Laufwerk. "
-               "Er wird beim ersten Backup automatisch angelegt.\n\n"
+               "Der Ordner, in den gesichert wird – z. B. auf einer externen Festplatte, einem zweiten Laufwerk "
+               "oder einem NAS im Netzwerk. Er wird beim ersten Backup automatisch angelegt.\n\n"
+               "Netzwerk (Synology, QNAP, FRITZ!Box, TrueNAS, Windows-Freigaben …): Pfad wie \\\\NAS\\Backup\\PC "
+               "oder \\\\192.168.178.20\\Backup eintippen, über die Ordnerauswahl links „Netzwerk“ wählen oder ein "
+               "verbundenes Netzlaufwerk (z. B. Z:) nutzen. Braucht die Freigabe ein Passwort, erscheint „Am NAS "
+               "anmelden …“ – mit „Anmeldedaten speichern“ klappt es danach auch bei der automatischen "
+               "Synchronisierung. Windows 11 erlaubt keinen Gastzugang ohne Passwort mehr; nutze ein Benutzerkonto "
+               "des NAS.\n\n"
+               "Ist das NAS gerade aus oder wacht noch auf, wartet ein Backup bis zu einer Minute darauf. Bricht "
+               "die Verbindung mitten im Lauf ab, wird er sauber beendet und beim nächsten Mal fortgesetzt.\n\n"
                "Der Balken zeigt, wie voll das Laufwerk ist. Vor jedem Backup wird geprüft, ob genug Platz für die "
                "neuen Dateien und die Snapshots vorhanden ist – sonst startet es gar nicht erst."),
     "snapshots_option": ("Snapshots anlegen",
@@ -71,8 +83,8 @@ HELP = {
     "auto_sync_profile": ("In automatische Synchronisierung einbeziehen",
                           "Ist die automatische Synchronisierung in den Einstellungen aktiv, wird dieses Profil im "
                           "eingestellten Abstand (z. B. alle 60 Minuten) automatisch gesichert.\n\n"
-                          "Ist das Ziel-Laufwerk gerade nicht angeschlossen (z. B. externe Festplatte), wird das "
-                          "Profil übersprungen und beim nächsten Durchlauf erneut versucht."),
+                          "Ist das Ziel gerade nicht erreichbar (externe Festplatte nicht angeschlossen, NAS "
+                          "ausgeschaltet), wird das Profil übersprungen und beim nächsten Durchlauf erneut versucht."),
     "excludes": ("Ausschließen",
                  "Dateien und Ordner, die nicht gesichert werden sollen – ein Muster pro Zeile:\n\n"
                  "• .git, node_modules, __pycache__ – Ordner mit diesem Namen (überall)\n"
@@ -135,7 +147,8 @@ HELP = {
     "auto_sync": ("Automatisch synchronisieren",
                   "Solange der Backup Manager läuft (auch im Infobereich), werden alle Profile mit eingeschalteter "
                   "Synchronisierung im eingestellten Abstand nacheinander gesichert – ohne dass du etwas tun musst.\n\n"
-                  "Nicht angeschlossene Laufwerke werden übersprungen. Wurden Dateien gesichert oder gab es Fehler, "
+                  "Nicht angeschlossene Laufwerke und nicht erreichbare NAS werden übersprungen. Wurden Dateien "
+                  "gesichert oder gab es Fehler, "
                   "erscheint eine kurze Windows-Benachrichtigung.\n\n"
                   "Ob ein Profil mitmacht, stellst du unter „Quellen & Ziel → Optionen“ ein."),
     "interval": ("Abstand",
@@ -146,6 +159,14 @@ HELP = {
                       "Ein Klick auf das X beendet das Programm nicht, sondern blendet das Fenster aus. Der Backup "
                       "Manager läuft im Infobereich weiter, damit die automatische Synchronisierung funktioniert.\n\n"
                       "Vollständig beenden: Rechtsklick auf das Symbol im Infobereich → „Beenden“."),
+    "update_check": ("Automatisch nach Updates suchen",
+                     "Einmal täglich fragt der Backup Manager bei GitHub nach, welches die neueste Version ist. Dabei "
+                     "werden keine Daten über dich oder deine Backups übertragen.\n\n"
+                     "Gibt es eine neue Version, erscheint ein Hinweis (im Infobereich als Windows-Benachrichtigung). "
+                     "„Jetzt aktualisieren“ lädt den Installer, prüft seine Echtheit anhand der Prüfsumme von GitHub "
+                     "und installiert ihn. Profile, Einstellungen und Snapshots bleiben erhalten.\n\n"
+                     "Ausgeschaltet geht der Backup Manager nie von selbst ins Internet; „Jetzt prüfen“ funktioniert "
+                     "trotzdem."),
     "workers": ("Parallele Kopiervorgänge",
                 "Wie viele Dateien gleichzeitig kopiert werden. Mehr ist auf SSDs und schnellen Laufwerken "
                 "schneller; bei klassischen Festplatten besser den HDD-Modus im Profil nutzen (dann wird immer "

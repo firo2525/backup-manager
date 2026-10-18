@@ -4,7 +4,7 @@
     pythonw engine/start.py --minimized           → unsichtbar im Infobereich starten (Autostart)
     python  engine/start.py --selftest            → Abhängigkeiten prüfen (install.bat)
     python  engine/start.py --create-shortcuts    → Verknüpfungen Desktop + Startmenü (install.bat / Installer)
-            [--no-desktop] [--pin]
+            [--no-desktop | --keep-desktop] [--pin]
     python  engine/start.py --remove-integration  → Verknüpfungen und Autostart entfernen (Deinstallation)
 """
 import os
@@ -130,8 +130,11 @@ def main():
     if "--selftest" in args:
         return selftest()
     if "--create-shortcuts" in args:
-        return create_shortcuts(desktop="--no-desktop" not in args, pin="--pin" in args,
-                                all_users="--all-users" in args)
+        desktop = "--no-desktop" not in args
+        if "--keep-desktop" in args:  # Update: nur ersetzen, was schon da ist
+            from engine import system
+            desktop = system.has_desktop_shortcut()
+        return create_shortcuts(desktop=desktop, pin="--pin" in args, all_users="--all-users" in args)
     if "--remove-integration" in args:
         return remove_integration()
 

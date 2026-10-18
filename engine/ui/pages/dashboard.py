@@ -35,6 +35,7 @@ class DashboardPage(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.app = app
         self._copy_started = None
+        self._pending_job = None
         self._mode = "determinate"
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -205,18 +206,20 @@ class DashboardPage(ctk.CTkFrame):
             W.label(self.src_list, "Noch keine Quellen – lege fest, was gesichert werden soll.", 13,
                     color=T.MUTED).grid(row=0, column=0, sticky="w", padx=8, pady=6)
         for i, path in enumerate(shown):
-            exists = os.path.exists(path)
-            is_dir = os.path.isdir(path)
+            state = utils.path_state(path)
+            exists = state == "ok"
+            is_dir = exists and os.path.isdir(path)
             row = ctk.CTkFrame(self.src_list, fg_color="transparent")
             row.grid(row=i, column=0, sticky="ew", pady=1)
             row.grid_columnconfigure(1, weight=1)
-            W.IconBubble(row, "folder" if is_dir or not exists else "file", "danger" if not exists else "primary",
+            W.IconBubble(row, "folder" if is_dir or not exists else "file",
+                         W.PATH_BADGES[state][1] if not exists else "primary",
                          size=32, icon_size=15).grid(row=0, column=0, rowspan=2, padx=(8, 12), pady=5)
             norm = os.path.normpath(path)
             W.label(row, os.path.basename(norm) or norm, 13, "bold").grid(row=0, column=1, sticky="sw")
             W.label(row, os.path.dirname(norm), 11, color=T.MUTED).grid(row=1, column=1, sticky="nw")
             if not exists:
-                W.Badge(row, "Nicht gefunden", "danger").grid(row=0, column=2, rowspan=2, padx=8)
+                W.Badge(row, *W.PATH_BADGES[state]).grid(row=0, column=2, rowspan=2, padx=8)
         if len(shown) < len(sources):
             W.label(self.src_list, f"+ {len(sources) - len(shown)} weitere", 12, color=T.MUTED).grid(
                 row=len(shown), column=0, sticky="w", padx=10, pady=(4, 0))
@@ -305,19 +308,28 @@ class DashboardPage(ctk.CTkFrame):
 
         # Quellen
         srcs = prof["sources"]
-        missing = [s for s in srcs if not os.path.exists(s)]
-        dirs = sum(1 for s in srcs if os.path.isdir(s))
+        states = {s: utils.path_state(s) for s in srcs}
+        missing = [s for s, st in states.items() if st in ("missing", "unreachable")]
+        dirs = sum(1 for s, st in states.items() if st == "ok" and os.path.isdir(s))
         if missing:
             self.stat_sources.set(str(len(srcs)), f"{len(missing)} nicht gefunden", "danger")
+        elif "pending" in states.values():
+            self.stat_sources.set(str(len(srcs)), "NAS wird geprüft …", "info")
         else:
             self.stat_sources.set(str(len(srcs)), f"{dirs} Ordner · {len(srcs) - dirs} Dateien" if srcs else "Noch keine Quellen", "info")
 
         # Laufwerk
         target = prof["target"]
+        state = utils.location_status(target)[0] if target else None
         if not target:
             self.stat_drive.set("–", "Kein Ziel gewählt", "muted")
-        elif not utils.drive_available(target):
-            self.stat_drive.set("Nicht verbunden", f"Laufwerk {utils.drive_of(target)}", "danger")
+        elif state == "pending":
+            self.stat_drive.set("Wird geprüft …", utils.location_name(target), "muted")
+        elif state == "login":
+            self.stat_drive.set("Anmeldung nötig", utils.location_name(target), "warning")
+        elif state != "ok":
+            self.stat_drive.set("Nicht erreichbar" if utils.is_network_path(target) else "Nicht verbunden",
+                                utils.location_name(target), "danger")
         else:
             usage = utils.disk_usage(target)
             if usage:
@@ -328,6 +340,18 @@ class DashboardPage(ctk.CTkFrame):
             else:
                 self.stat_drive.set("–", "Unbekannt", "muted")
         self.refresh_snapshot_info()
+        if not self._pending_job and (state == "pending" or "pending" in states.values()):
+            self._pending_job = self.after(1000, self._pending_tick)
+
+    def _pending_tick(self):
+        """Neu zeichnen, sobald die NAS-Prüfung im Hintergrund fertig ist."""
+        self._pending_job = None
+        prof = self.app.current_profile()
+        paths = [p for p in [prof["target"]] + list(prof["sources"]) if p] if prof else []
+        if any(utils.location_status(p, wait=0)[0] == "pending" for p in paths):
+            self._pending_job = self.after(1000, self._pending_tick)
+        else:
+            self.refresh()
 
     def refresh_snapshot_info(self):
         prof = self.app.current_profile()

@@ -22,6 +22,7 @@ GLYPHS = {
     "moon": "\uE708", "sun": "\uE706", "filter": "\uE71C", "more": "\uE712", "save": "\uE74E",
     "library": "\uE8F1", "broom": "\uEA99", "open_local": "\uE8DA", "diagnostic": "\uE9D9",
     "calendar": "\uE787", "chevron": "\uE76C", "restore": "\uE777", "save_copy": "\uEA35", "globe": "\uE774",
+    "lock": "\uE72E",
 }
 
 _cache = {}

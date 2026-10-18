@@ -16,9 +16,10 @@ class SourceRow(ctk.CTkFrame):
         super().__init__(master, fg_color=T.CARD_ALT, corner_radius=10)
         self.path = path
         self.grid_columnconfigure(1, weight=1)
-        exists = os.path.exists(path)
-        is_dir = os.path.isdir(path)
-        tone = "danger" if not exists else ("primary" if is_dir else "info")
+        self.state = utils.path_state(path)
+        exists = self.state == "ok"
+        is_dir = exists and os.path.isdir(path)
+        tone = W.PATH_BADGES[self.state][1] if not exists else ("primary" if is_dir else "info")
         W.IconBubble(self, "folder" if is_dir or not exists else "file", tone, size=34, icon_size=16).grid(
             row=0, column=0, rowspan=2, padx=(10, 12), pady=8)
         norm = os.path.normpath(path)
@@ -26,7 +27,7 @@ class SourceRow(ctk.CTkFrame):
         W.label(self, name, 13, "bold").grid(row=0, column=1, sticky="sw", pady=(7, 0))
         W.label(self, os.path.dirname(norm), 11, color=T.MUTED).grid(row=1, column=1, sticky="nw", pady=(0, 7))
         if not exists:
-            W.Badge(self, "Nicht gefunden", "danger").grid(row=0, column=2, rowspan=2, padx=6)
+            W.Badge(self, *W.PATH_BADGES[self.state]).grid(row=0, column=2, rowspan=2, padx=6)
         btn = W.button(self, "", "ghost", "delete", height=32, icon_size=14, command=lambda: on_remove(path))
         btn.configure(hover_color=T.DANGER_SOFT)
         btn.grid(row=0, column=3, rowspan=2, padx=(0, 8))
@@ -38,6 +39,7 @@ class SourcesPage(ctk.CTkFrame):
         self.app = app
         self.rows = {}
         self._exclude_job = None
+        self._pending_job = None
         self.grid_columnconfigure(0, weight=3)
         self.grid_columnconfigure(1, weight=2)
         self.grid_rowconfigure(1, weight=1)
@@ -85,7 +87,7 @@ class SourcesPage(ctk.CTkFrame):
         add = ctk.CTkFrame(card, fg_color="transparent")
         add.grid(row=2, column=0, sticky="ew", padx=20, pady=(10, 10))
         add.grid_columnconfigure(0, weight=1)
-        self.path_entry = ctk.CTkEntry(add, placeholder_text="Pfad einfügen, z. B. D:\\Projekte\\Website", height=36,
+        self.path_entry = ctk.CTkEntry(add, placeholder_text="Pfad einfügen, z. B. D:\\Projekte oder \\\\NAS\\Fotos", height=36,
                                        corner_radius=10, font=T.font(13), fg_color=T.INPUT, border_color=T.BORDER_STRONG,
                                        text_color=T.TEXT)
         self.path_entry.grid(row=0, column=0, sticky="ew")
@@ -108,10 +110,13 @@ class SourcesPage(ctk.CTkFrame):
         self.target_entry.bind("<FocusOut>", lambda e: self._commit_target())
         W.button(row, "", "secondary", "folder_open", height=36, command=self._select_target).grid(row=0, column=1, padx=(8, 0))
 
-        self.target_status = W.label(card, "", 12, color=T.MUTED)
+        self.target_status = W.autowrap(W.label(card, "", 12, color=T.MUTED), card, margin=40)
         self.target_status.grid(row=2, column=0, sticky="ew", padx=20, pady=(10, 4))
         self.usage = ctk.CTkProgressBar(card, height=6, corner_radius=3, progress_color=T.PRIMARY, fg_color=T.CARD_ALT)
         self.usage.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 18))
+        self.login_btn = W.button(card, "Am NAS anmelden …", "secondary", "lock", height=32, command=self._login_target)
+        self.login_btn.grid(row=4, column=0, sticky="w", padx=20, pady=(0, 18))
+        self.login_btn.grid_remove()
 
     def _build_options(self, parent):
         card = W.Card(parent)
@@ -185,20 +190,46 @@ class SourcesPage(ctk.CTkFrame):
             self.empty.lift()
             return
         self.empty.place_forget()
+        self.target_var.set(prof["target"])
+        for switch, value in ((self.hdd, prof["hdd_mode"]), (self.snaps, prof.get("snapshots", True)),
+                              (self.sync, prof.get("auto_sync", True))):
+            switch.select() if value else switch.deselect()
+        self.excludes.delete("1.0", "end")
+        self.excludes.insert("1.0", "\n".join(prof["excludes"]))
+        self._refresh_status()
+
+    def _refresh_status(self):
+        """Quellenliste, Zielanzeige und Hinweise neu aufbauen (alles, was von der Erreichbarkeit abhängt)."""
+        prof = self.app.current_profile()
+        if not prof:
+            return
         for row in self.rows.values():
             row.destroy()
         self.rows = {}
         for p in prof["sources"]:
             self._add_row(p)
         self._update_list_state()
-        self.target_var.set(prof["target"])
         self._update_target_status()
-        for switch, value in ((self.hdd, prof["hdd_mode"]), (self.snaps, prof.get("snapshots", True)),
-                              (self.sync, prof.get("auto_sync", True))):
-            switch.select() if value else switch.deselect()
-        self.excludes.delete("1.0", "end")
-        self.excludes.insert("1.0", "\n".join(prof["excludes"]))
         self._update_issues()
+        self._watch_pending()
+
+    def _watch_pending(self):
+        """Läuft im Hintergrund noch eine NAS-Prüfung, die Anzeige aktualisieren, sobald sie fertig ist."""
+        if self._pending_job:
+            return
+        prof = self.app.current_profile()
+        paths = [p for p in [prof["target"]] + list(prof["sources"]) if p] if prof else []
+        if any(utils.location_status(p, wait=0)[0] == "pending" for p in paths):
+            self._pending_job = self.after(1000, self._pending_tick)
+
+    def _pending_tick(self):
+        self._pending_job = None
+        prof = self.app.current_profile()
+        paths = [p for p in [prof["target"]] + list(prof["sources"]) if p] if prof else []
+        if any(utils.location_status(p, wait=0)[0] == "pending" for p in paths):
+            self._pending_job = self.after(1000, self._pending_tick)
+        else:
+            self._refresh_status()
 
     def _add_row(self, path):
         row = SourceRow(self.list, path, self._remove)
@@ -216,12 +247,17 @@ class SourcesPage(ctk.CTkFrame):
     def _update_target_status(self):
         target = self.app.current_profile()["target"]
         if not target:
-            self.target_status.configure(text="Bitte einen Zielordner wählen.", text_color=T.WARNING)
+            self.target_status.configure(text="Bitte einen Zielordner wählen – auch ein Netzwerkpfad wie "
+                                              "\\\\NAS\\Backup ist möglich.", text_color=T.WARNING)
             self.usage.set(0)
             return
-        if not utils.drive_available(target):
-            self.target_status.configure(text=f"Laufwerk {utils.drive_of(target)} ist nicht verbunden.", text_color=T.DANGER)
+        state, problem = utils.location_status(target)
+        self.login_btn.grid_remove()
+        if problem:
+            self.target_status.configure(text=problem, text_color=T.MUTED if state == "pending" else T.DANGER)
             self.usage.set(0)
+            if state == "login":
+                self.login_btn.grid()
             return
         usage = utils.disk_usage(target)
         exists = os.path.isdir(target)
@@ -230,6 +266,8 @@ class SourcesPage(ctk.CTkFrame):
             self.usage.set(used)
             self.usage.configure(progress_color=T.DANGER if used > 0.95 else T.WARNING if used > 0.85 else T.PRIMARY)
             text = f"{utils.human_size(usage.free)} frei von {utils.human_size(usage.total)}"
+            if utils.is_network_path(target):
+                text += f" · {utils.location_name(target)}"
             if not exists:
                 text += " · Ordner wird beim ersten Backup angelegt"
             self.target_status.configure(text=text, text_color=T.MUTED)
@@ -270,6 +308,7 @@ class SourcesPage(ctk.CTkFrame):
             self.app.update_profile(sources=sources)
             self._update_list_state()
             self._update_issues()
+            self._watch_pending()
             self.app.toast.show(f"{added} Quelle(n) hinzugefügt.", "success")
         elif paths:
             self.app.toast.show("Diese Quelle ist bereits vorhanden.", "info")
@@ -300,8 +339,12 @@ class SourcesPage(ctk.CTkFrame):
         path = self.path_entry.get().strip().strip('"')
         if not path:
             return
-        if not os.path.exists(path):
-            W.info(self, "Pfad nicht gefunden", f"„{path}“ existiert nicht oder ist nicht erreichbar.", "warning")
+        state, problem = utils.location_status(path)
+        if state == "login" and not self.app.network_login(path, problem):
+            return
+        if not utils.path_exists(path):
+            W.info(self, "Pfad nicht gefunden", utils.unavailable_reason(path)
+                   or f"„{path}“ existiert nicht oder ist nicht erreichbar.", "warning")
             return
         if self.add_paths([path]):
             self.path_entry.delete(0, "end")
@@ -353,6 +396,10 @@ class SourcesPage(ctk.CTkFrame):
             self.target_var.set(os.path.normpath(path))
             self._commit_target()
 
+    def _login_target(self):
+        target = self.app.current_profile()["target"]
+        self.app.network_login(target, utils.unavailable_reason(target))
+
     def _commit_target(self):
         if not self.app.current_profile():
             return
@@ -363,6 +410,7 @@ class SourcesPage(ctk.CTkFrame):
             self.app.toast.show("Ziel gespeichert.", "success", 2000)
         self._update_target_status()
         self._update_issues()
+        self._watch_pending()
 
     def _schedule_excludes(self):
         if self._exclude_job:

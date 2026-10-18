@@ -20,9 +20,10 @@ if _BASE not in sys.path:
     sys.path.insert(0, _BASE)
 
 from engine import config, versions  # noqa: E402
-from engine.utils import (MTIME_TOLERANCE, copy_file, disk_usage, drive_available, drive_of,  # noqa: E402
-                          compile_excludes, force_long_path, human_size, needs_copy, long_path,
-                          norm_key, source_name, strip_long_path, try_remove, format_duration)
+from engine.utils import (MTIME_TOLERANCE, NET_WAIT, copy_file, disk_usage, drive_of,  # noqa: E402
+                          compile_excludes, copy_error_text, force_long_path, human_size, is_connection_lost,
+                          is_network_path, is_system_dir, is_system_file, location_name, location_status,
+                          needs_copy, long_path, norm_key, source_name, try_remove, format_duration)
 
 LOG_DIR = config.LOG_DIR
 APP_VENV_DIR = os.path.join(config.APP_DIR, '.venv')
@@ -31,8 +32,10 @@ APP_VENV_DIR = os.path.join(config.APP_DIR, '.venv')
 OK, FAILED, CANCELLED, PARTIAL = 0, 1, 2, 3
 
 SPACE_MARGIN = 64 * 1024 * 1024  # Sicherheitsreserve beim Speicherplatz-Check
+_PROBE_MTIME = 1577880000.0       # 01.01.2020 – Testzeitstempel für den Schreibtest auf Netzwerkzielen
 
 _cancel = threading.Event()
+_abort = threading.Event()        # Netzwerkverbindung verloren → Lauf beenden statt jede Datei scheitern zu lassen
 
 
 def set_cancel_flag(value):
@@ -127,6 +130,7 @@ class _Job:
     exists: bool
     dest_size: int
     snap_rel: str
+    dest_mtime: float = 0.0
 
 
 class _Reporter:
@@ -151,47 +155,104 @@ class _Reporter:
 
 # --------------------------------------------------------------------------- Analyse
 
-def _walk_files(root_dir, is_excluded, skip_keys, on_error):
-    """Liefert (voller_pfad, relativer_pfad) aller Dateien unterhalb von root_dir."""
-    walk_root = force_long_path(root_dir)
+def _walk_files(root_dir, is_excluded, skip_keys, on_error, system_skipped=None):
+    """Liefert (voller_pfad, relativer_pfad, stat) aller Dateien unterhalb von root_dir.
 
-    def _onerror(err):
-        on_error(strip_long_path(getattr(err, 'filename', '') or root_dir), err)
-
-    for current, dirs, files in os.walk(walk_root, onerror=_onerror):
+    Größe und Änderungszeit kommen direkt aus dem Verzeichnis-Listing (os.scandir) – ohne eigene Anfrage pro
+    Datei, was über das Netzwerk um ein Vielfaches schneller ist. Systemordner von NAS (#snapshot, @eaDir, …)
+    werden nie betreten; gezählt werden sie in `system_skipped` (Name → Anzahl)."""
+    stack = ['']
+    while stack:
         if _cancel.is_set():
             return
-        rel_dir = os.path.relpath(current, walk_root)
-        rel_dir = '' if rel_dir == '.' else rel_dir
-        keep = []
-        for d in dirs:
-            rel = os.path.join(rel_dir, d) if rel_dir else d
-            if is_excluded(d, rel):
+        rel_dir = stack.pop()
+        current = os.path.join(root_dir, rel_dir) if rel_dir else root_dir
+        try:
+            with os.scandir(force_long_path(current)) as it:
+                entries = list(it)
+        except OSError as err:
+            on_error(current, err)
+            continue
+        subdirs = []
+        for entry in entries:
+            name = entry.name
+            rel = os.path.join(rel_dir, name) if rel_dir else name
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                is_dir = False
+            if is_dir:
+                if is_system_dir(name):
+                    if system_skipped is not None:
+                        system_skipped[name] = system_skipped.get(name, 0) + 1
+                    continue
+                if is_excluded(name, rel):
+                    continue
+                if skip_keys and norm_key(os.path.join(current, name)) in skip_keys:
+                    logging.info(f"Übersprungen (Programm-/Zielordner): {os.path.join(current, name)}")
+                    continue
+                if not entry.is_symlink():
+                    subdirs.append(rel)
                 continue
-            if skip_keys and norm_key(os.path.join(current, d)) in skip_keys:
-                logging.info(f"Übersprungen (Programm-/Zielordner): {strip_long_path(os.path.join(current, d))}")
+            if is_system_file(name) or is_excluded(name, rel):
                 continue
-            keep.append(d)
-        dirs[:] = keep
-        for f in files:
-            rel = os.path.join(rel_dir, f) if rel_dir else f
-            if not is_excluded(f, rel):
-                yield os.path.join(root_dir, rel), rel
+            try:
+                st = entry.stat()
+            except OSError:
+                st = None  # _make_job meldet den Fehler
+            yield os.path.join(root_dir, rel), rel, st
+        stack.extend(reversed(subdirs))
 
 
-def _make_job(src_file, dest_file, snap_rel, errors, mode='backup', overwrite_newer=False):
+def _log_system_skipped(system_skipped):
+    if system_skipped:
+        names = ", ".join(f"{n} ({c}×)" if c > 1 else n for n, c in sorted(system_skipped.items()))
+        logging.info(f"Systemordner von NAS/Windows übersprungen: {names}")
+
+
+class _DirIndex:
+    """Liest jeden Zielordner einmal komplett ein, statt jede Datei einzeln abzufragen (wichtig bei NAS-Zielen).
+    Die Analyse geht Ordner für Ordner vor, daher genügt es, sich den zuletzt gelesenen Ordner zu merken."""
+
+    def __init__(self):
+        self._dir = None
+        self._entries = {}
+
+    def stat(self, path):
+        folder, name = os.path.split(path)
+        if folder != self._dir:
+            self._dir, self._entries = folder, {}
+            try:
+                with os.scandir(long_path(folder)) as it:
+                    self._entries = {e.name.lower(): e for e in it}
+            except OSError:
+                pass  # Ordner fehlt im Ziel → alles darin ist neu
+        entry = self._entries.get(name.lower())
+        if entry is None:
+            return None
+        try:
+            return entry.stat()
+        except OSError:
+            return None
+
+
+def _make_job(src_file, dest_file, snap_rel, errors, mode='backup', overwrite_newer=False, src_stat=None,
+              dest_index=None):
     """Vergleicht Quelle und Ziel. Rückgabe: _Job, 'skip', 'newer' oder None (Fehler)."""
-    try:
-        s = os.stat(long_path(src_file))
-    except OSError as e:
-        errors.append((src_file, f"Nicht lesbar: {e.strerror or e}"))
-        return None
-    try:
-        d = os.stat(long_path(dest_file))
-    except FileNotFoundError:
-        d = None
-    except OSError:
-        d = None
+    s = src_stat
+    if s is None:
+        try:
+            s = os.stat(long_path(src_file))
+        except OSError as e:
+            errors.append((src_file, f"Nicht lesbar: {e.strerror or e}"))
+            return None
+    if dest_index is not None:
+        d = dest_index.stat(dest_file)
+    else:
+        try:
+            d = os.stat(long_path(dest_file))
+        except OSError:
+            d = None
     if mode == 'recovery' and d is not None:
         same = s.st_size == d.st_size and abs(s.st_mtime - d.st_mtime) <= MTIME_TOLERANCE
         if same:
@@ -200,7 +261,8 @@ def _make_job(src_file, dest_file, snap_rel, errors, mode='backup', overwrite_ne
             return 'newer'
     elif not needs_copy(s, d):
         return 'skip'
-    return _Job(src_file, dest_file, s.st_size, d is not None, d.st_size if d else 0, snap_rel)
+    return _Job(src_file, dest_file, s.st_size, d is not None, d.st_size if d else 0, snap_rel,
+                d.st_mtime if d else 0.0)
 
 
 def _check_space(jobs, target, snapshots=True):
@@ -237,8 +299,17 @@ class _NoSnapshots:
         return False
 
 
+def _dest_unchanged(job):
+    """True, wenn die Zieldatei noch genau so da ist wie vor dem Kopierversuch."""
+    try:
+        d = os.stat(long_path(job.dest))
+    except OSError:
+        return False
+    return d.st_size == job.dest_size and abs(d.st_mtime - job.dest_mtime) <= 1.0
+
+
 def _process_job(job, recorder):
-    if _cancel.is_set():
+    if _cancel.is_set() or _abort.is_set():
         return 'cancelled', job, None
     snapshot = None
     if job.exists and recorder.with_snapshots:
@@ -254,14 +325,27 @@ def _process_job(job, recorder):
         copy_file(job.src, job.dest)
     except Exception as e:
         logging.error(f"Fehler beim Kopieren von {job.src} -> {job.dest}: {e}")
+        lost = is_connection_lost(e)
+        if lost and not _abort.is_set():
+            _abort.set()
+            logging.error("Netzwerkverbindung unterbrochen – der Lauf wird beendet.")
         if snapshot:
-            try_remove(snapshot)
-        return 'error', job, str(e)
+            # Ein abgebrochener Kopiervorgang kann die alte Zieldatei schon gekürzt oder gelöscht haben
+            # (z. B. 4-GB-Grenze von FAT32, Verbindungsabbruch). Dann bleibt der Snapshot erhalten und wird
+            # im Lauf vermerkt, damit „Zurücksetzen“ die alte Version wiederherstellt.
+            if not lost and _dest_unchanged(job):
+                try_remove(snapshot)
+            else:
+                recorder.add(job.src, job.dest, snapshot, created=False, size=job.dest_size)
+                logging.warning(f"Alte Version bleibt im Snapshot erhalten: {job.dest}")
+        return 'error', job, copy_error_text(e, job.size)
     recorder.add(job.src, job.dest, snapshot, created=not job.exists, size=job.dest_size if snapshot else None)
     return 'copied', job, None
 
 
 def _execute(jobs, recorder, workers, progress, report, result):
+    """Kopiert alle Jobs. Rückgabe: True, wenn wegen verlorener Netzwerkverbindung abgebrochen wurde."""
+    _abort.clear()
     progress.phase = 'copy'
     progress.files_done = 0
     progress.files_total = len(jobs)
@@ -287,11 +371,11 @@ def _execute(jobs, recorder, workers, progress, report, result):
 
     if workers <= 1:
         for job in jobs:
-            if _cancel.is_set():
+            if _cancel.is_set() or _abort.is_set():
                 break
             progress.current = job.src
             handle(_process_job(job, recorder))
-        return
+        return _abort.is_set()
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         it = iter(jobs)
@@ -300,23 +384,60 @@ def _execute(jobs, recorder, workers, progress, report, result):
             done, pending = wait(pending, return_when=FIRST_COMPLETED)
             for fut in done:
                 handle(fut.result())
-            if not _cancel.is_set():
+            if not _cancel.is_set() and not _abort.is_set():
                 pending |= {ex.submit(_process_job, j, recorder) for j in islice(it, len(done))}
+    return _abort.is_set()
 
 
-def _prepare_target(target):
-    if not target:
-        return "Kein Zielordner angegeben."
-    if not drive_available(target):
-        return f"Ziel-Laufwerk {drive_of(target)} ist nicht verfügbar (nicht angeschlossen?)."
+def _wait_for(path, progress=None, report=None):
+    """Prüft Laufwerk bzw. Freigabe; ein NAS bekommt bis zu NET_WAIT Sekunden, um zu antworten
+    (z. B. beim Aufwachen aus dem Ruhezustand). Rückgabe: Fehlermeldung oder None."""
+    state, message = location_status(path, wait=0.5)
+    if state == 'pending':
+        logging.info(f"Warte auf {location_name(path)} …")
+        if progress is not None and report is not None:
+            progress.current = f"Warte auf {location_name(path)} …"
+            report(progress, force=True)
+        state, message = location_status(path, wait=NET_WAIT)
+    return None if state == 'ok' else message
+
+
+def _probe_target(target):
+    """Schreibtest auf Netzwerkzielen: deckt fehlende Schreibrechte vor dem ersten Kopieren auf und prüft, ob das
+    NAS Änderungszeiten übernimmt. Rückgabe: Fehlermeldung oder None."""
+    probe = os.path.join(target, f".backupmanager-test-{os.getpid()}.tmp")
+    p = long_path(probe)
     try:
-        os.makedirs(long_path(target), exist_ok=True)
+        with open(p, 'wb') as f:
+            f.write(b'Backup Manager - Schreibtest')
+        os.utime(p, (_PROBE_MTIME, _PROBE_MTIME))
+        delta = os.stat(p).st_mtime - _PROBE_MTIME
     except OSError as e:
-        return f"Zielordner kann nicht angelegt werden: {e}"
+        try_remove(probe)
+        return f"Im Ziel kann nicht geschrieben werden ({copy_error_text(e)}). Hat der NAS-Benutzer Schreibrechte?"
+    try_remove(probe)
+    if abs(delta) > MTIME_TOLERANCE:
+        logging.warning(f"Das Ziel übernimmt Änderungszeiten nicht genau (Abweichung {delta:+.0f} s). Geänderte "
+                        f"Dateien werden trotzdem erkannt, sobald sich ihre Größe ändert oder sie neuer sind.")
     return None
 
 
-def _finish(result, recorder, progress, report, started, cancelled, label):
+def _prepare_target(target, progress=None, report=None):
+    if not target:
+        return "Kein Zielordner angegeben."
+    problem = _wait_for(target, progress, report)
+    if problem:
+        return problem
+    try:
+        os.makedirs(long_path(target), exist_ok=True)
+    except OSError as e:
+        return f"Zielordner kann nicht angelegt werden: {copy_error_text(e)}"
+    if is_network_path(target):
+        return _probe_target(target)
+    return None
+
+
+def _finish(result, recorder, progress, report, started, cancelled, label, connection_lost=False):
     result.duration = time.monotonic() - started
     stats = {"copied": result.copied, "errors": len(result.errors), "skipped": result.skipped,
              "bytes": result.bytes_copied, "duration": round(result.duration, 1)}
@@ -325,6 +446,10 @@ def _finish(result, recorder, progress, report, started, cancelled, label):
     if cancelled:
         result.code = CANCELLED
         result.message = f"{label} abgebrochen."
+    elif connection_lost:
+        result.code = PARTIAL if result.copied else FAILED
+        result.message = (f"Netzwerkverbindung unterbrochen – {label} nach {result.copied} Datei(en) beendet. "
+                          f"Beim nächsten Lauf geht es an dieser Stelle weiter.")
     elif result.errors:
         result.code = PARTIAL
         result.message = f"{label} mit {len(result.errors)} Fehler(n) abgeschlossen."
@@ -358,7 +483,7 @@ def run_backup(progress_callback=None, profile=None, hdd_mode: bool = False, sou
         result.message = "Keine Quellen angegeben."
         logging.error(result.message)
         return result
-    error = _prepare_target(target)
+    error = _prepare_target(target, progress, report)
     if error:
         result.message = error
         logging.error(error)
@@ -369,6 +494,7 @@ def run_backup(progress_callback=None, profile=None, hdd_mode: bool = False, sou
     skip_keys = {norm_key(p) for p in (versions.VERSIONS_DIR, APP_VENV_DIR, target)}
     used_names = {}
     jobs = []
+    system_skipped = {}
 
     def on_walk_error(path, err):
         result.errors.append((path, f"Ordner nicht lesbar: {getattr(err, 'strerror', None) or err}"))
@@ -382,10 +508,17 @@ def run_backup(progress_callback=None, profile=None, hdd_mode: bool = False, sou
         if name.lower() in used_names and norm_key(used_names[name.lower()]) != norm_key(src_n):
             logging.warning(f"Achtung: '{src_n}' und '{used_names[name.lower()]}' landen im selben Zielordner '{name}'.")
         used_names.setdefault(name.lower(), src_n)
+        problem = _wait_for(src_n, progress, report)
+        if problem:
+            result.errors.append((src_n, problem))
+            logging.warning(f"Quelle übersprungen: {src_n} – {problem}")
+            continue
         if os.path.isdir(long_path(src_n)):
-            for src_file, rel in _walk_files(src_n, is_excluded, skip_keys, on_walk_error):
+            dest_index = _DirIndex()
+            for src_file, rel, st in _walk_files(src_n, is_excluded, skip_keys, on_walk_error, system_skipped):
                 dest = os.path.join(target, name, rel)
-                job = _make_job(src_file, dest, os.path.join(name, rel), result.errors)
+                job = _make_job(src_file, dest, os.path.join(name, rel), result.errors, src_stat=st,
+                                dest_index=dest_index)
                 progress.files_done += 1
                 progress.current = src_file
                 if isinstance(job, _Job):
@@ -404,6 +537,7 @@ def run_backup(progress_callback=None, profile=None, hdd_mode: bool = False, sou
             logging.warning(f"Quelle nicht gefunden: {src_n}")
 
     progress.skipped = result.skipped
+    _log_system_skipped(system_skipped)
     recorder = versions.RunRecorder(profile=profile, kind='backup') if snapshots else _NoSnapshots()
     if _cancel.is_set():
         return _finish(result, recorder, progress, report, started, True, 'Backup')
@@ -418,8 +552,8 @@ def run_backup(progress_callback=None, profile=None, hdd_mode: bool = False, sou
         logging.error(space_error)
         return result
 
-    _execute(jobs, recorder, 1 if hdd_mode else max(1, int(workers)), progress, report, result)
-    return _finish(result, recorder, progress, report, started, _cancel.is_set(), 'Backup')
+    lost = _execute(jobs, recorder, 1 if hdd_mode else max(1, int(workers)), progress, report, result)
+    return _finish(result, recorder, progress, report, started, _cancel.is_set(), 'Backup', lost)
 
 
 # --------------------------------------------------------------------------- Recovery
@@ -443,13 +577,15 @@ def run_recovery(progress_callback=None, hdd_mode: bool = False, sources=None, t
     if not sources:
         result.message = "Keine Quellen angegeben."
         return result
-    if not target or not os.path.isdir(long_path(target)):
-        result.message = f"Backup-Ziel nicht gefunden: {target or '(leer)'}"
+    problem = _wait_for(target, progress, report)
+    if problem or not os.path.isdir(long_path(target)):
+        result.message = problem or f"Backup-Ziel nicht gefunden: {target}"
         logging.error(result.message)
         return result
 
     is_excluded = compile_excludes(excludes)
     jobs = []
+    system_skipped = {}
 
     def on_walk_error(path, err):
         result.errors.append((path, f"Ordner nicht lesbar: {getattr(err, 'strerror', None) or err}"))
@@ -460,10 +596,17 @@ def run_recovery(progress_callback=None, hdd_mode: bool = False, sources=None, t
         src_n = os.path.normpath(src)
         name = source_name(src_n)
         backup_path = os.path.join(target, name)
+        problem = _wait_for(src_n, progress, report)
+        if problem:
+            result.errors.append((src_n, problem))
+            logging.warning(f"Quelle übersprungen: {src_n} – {problem}")
+            continue
         if os.path.isdir(long_path(backup_path)):
-            for backup_file, rel in _walk_files(backup_path, is_excluded, None, on_walk_error):
+            dest_index = _DirIndex()
+            for backup_file, rel, st in _walk_files(backup_path, is_excluded, None, on_walk_error, system_skipped):
                 outcome = _make_job(backup_file, os.path.join(src_n, rel), os.path.join(name, rel),
-                                    result.errors, mode='recovery', overwrite_newer=overwrite_newer)
+                                    result.errors, mode='recovery', overwrite_newer=overwrite_newer, src_stat=st,
+                                    dest_index=dest_index)
                 progress.files_done += 1
                 progress.current = backup_file
                 if isinstance(outcome, _Job):
@@ -487,6 +630,7 @@ def run_recovery(progress_callback=None, hdd_mode: bool = False, sources=None, t
 
     result.skipped += result.skipped_newer
     progress.skipped = result.skipped
+    _log_system_skipped(system_skipped)
     recorder = versions.RunRecorder(profile=profile, kind='recovery')
     if _cancel.is_set():
         return _finish(result, recorder, progress, report, started, True, 'Wiederherstellung')
@@ -497,8 +641,8 @@ def run_recovery(progress_callback=None, hdd_mode: bool = False, sources=None, t
         result.message = space_error
         logging.error(space_error)
         return result
-    _execute(jobs, recorder, 1 if hdd_mode else max(1, int(workers)), progress, report, result)
-    return _finish(result, recorder, progress, report, started, _cancel.is_set(), 'Wiederherstellung')
+    lost = _execute(jobs, recorder, 1 if hdd_mode else max(1, int(workers)), progress, report, result)
+    return _finish(result, recorder, progress, report, started, _cancel.is_set(), 'Wiederherstellung', lost)
 
 
 # --------------------------------------------------------------------------- Kommandozeile

@@ -5,7 +5,7 @@ from tkinter import filedialog
 
 import customtkinter as ctk
 
-from engine import config, system, utils, versions
+from engine import config, system, utils, version, versions
 from engine.ui import theme as T
 from engine.ui import widgets as W
 
@@ -124,6 +124,26 @@ class SettingsPage(ctk.CTkScrollableFrame):
         W.button(btns, "Öffnen", "secondary", "open_local", height=34,
                  command=lambda: W.open_in_explorer(versions.VERSIONS_DIR)).pack(side="left")
 
+        # --- Updates
+        card = self._card(6, "Updates")
+        _row(card, 1, "Automatisch nach Updates suchen", "Einmal täglich auf GitHub nachsehen, ob es eine neue "
+                                                         "Version gibt.", "update_check")
+        self.update_check = _switch(card, self._set_update_check)
+        if s.get("update_check"):
+            self.update_check.select()
+        self.update_check.grid(row=1, column=1, rowspan=2, padx=22, sticky="e")
+        status = ctk.CTkFrame(card, fg_color=T.CARD_ALT, corner_radius=12)
+        status.grid(row=3, column=0, columnspan=2, sticky="ew", padx=22, pady=(4, 20))
+        status.grid_columnconfigure(1, weight=1)
+        self.update_bubble = W.IconBubble(status, "download", "muted", size=32, icon_size=16)
+        self.update_bubble.grid(row=0, column=0, padx=(12, 10), pady=10)
+        self.update_status = W.label(status, "", 12, color=T.MUTED)
+        self.update_status.grid(row=0, column=1, sticky="ew")
+        W.autowrap(self.update_status, status, margin=280)
+        self.btn_update = W.button(status, "Jetzt prüfen", "secondary", "refresh", height=32,
+                                   command=self._update_action)
+        self.btn_update.grid(row=0, column=2, padx=12)
+
         self.on_settings_changed()
 
     def _card(self, row, title, help_key=None):
@@ -147,6 +167,36 @@ class SettingsPage(ctk.CTkScrollableFrame):
             self.interval.set(label)
         self.versions_label.configure(text=versions.VERSIONS_DIR)
         self.on_sync_status()
+        self.on_update_status()
+
+    def on_update_status(self):
+        app, s = self.app, self.app.settings
+        info = app.update_info
+        if app._updating:
+            text, tone, btn, state = f"Version {info.version} wird heruntergeladen und installiert …", "primary", \
+                "Jetzt aktualisieren", "disabled"
+        elif app._update_checking:
+            text, tone, btn, state = "Suche nach Updates …", "primary", "Jetzt prüfen", "disabled"
+        elif info:
+            text, tone, btn, state = (f"Version {info.version} ist verfügbar (installiert: {version.VERSION}).",
+                                      "success", "Jetzt aktualisieren", "normal")
+        else:
+            last = utils.parse_timestamp(s.get("last_update_check"))
+            text = f"Installiert: Version {version.VERSION} · " + (
+                f"zuletzt geprüft: {utils.relative_time(last).lower()}" if last else "noch nicht geprüft")
+            tone, btn, state = "muted", "Jetzt prüfen", "normal"
+        self.update_status.configure(text=text)
+        self.update_bubble.set("download", tone, icon_size=16)
+        self.btn_update.configure(text=btn, state=state)
+
+    def _update_action(self):
+        if self.app.update_info:
+            self.app.offer_update()
+        else:
+            self.app.check_for_updates(manual=True)
+
+    def _set_update_check(self):
+        self._save(update_check=bool(self.update_check.get()))
 
     def on_sync_status(self):
         s = self.app.settings

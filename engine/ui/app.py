@@ -8,16 +8,18 @@ import ctypes
 import logging
 import os
 import queue
+import textwrap
 import threading
 import time
 import traceback
+import webbrowser
 from collections import deque
 from datetime import datetime
 from tkinter import filedialog
 
 import customtkinter as ctk
 
-from engine import backup, config, system, utils, version, versions
+from engine import backup, config, netlogin, system, updater, utils, version, versions
 from engine.ui import theme as T
 from engine.ui import widgets as W
 from engine.ui.icons import app_icon_image, ensure_app_icon, icon
@@ -278,7 +280,12 @@ class BackupApp(ctk.CTk):
         self.operation_profile = None
         self.operation_label = None
         self._sync_queue = []
+        self._sync_wait_since = {}
         self._syncing = False
+        self.update_info = None          # updater.UpdateInfo, wenn eine neuere Version gefunden wurde
+        self._update_checking = False
+        self._updating = False
+        self._offer_update_on_show = False
         self._sync_auto = False
         self._sync_summary = []
         self._next_sync = time.time() + 120
@@ -514,6 +521,9 @@ class BackupApp(ctk.CTk):
         except Exception:
             pass
         self.focus_force()
+        if self._offer_update_on_show:
+            self._offer_update_on_show = False
+            self.after(400, self.offer_update)
 
     def hide_to_tray(self):
         W.HelpBadge.hide_all()
@@ -650,12 +660,17 @@ class BackupApp(ctk.CTk):
             issues.append(("warning", "Noch keine Quellen hinzugefügt."))
         if not target:
             issues.append(("warning", "Kein Zielordner gewählt."))
-        elif not utils.drive_available(target):
-            issues.append(("danger", f"Ziel-Laufwerk {utils.drive_of(target)} ist nicht verbunden."))
-        missing = [s for s in sources if not os.path.exists(s)]
+        else:
+            state, problem = utils.location_status(target)
+            if problem:
+                issues.append(("info" if state == "pending" else "danger", problem))
+        states = {s: utils.path_state(s) for s in sources}
+        missing = [s for s, st in states.items() if st in ("missing", "unreachable")]
         if missing:
             more = f" (+{len(missing) - 3} weitere)" if len(missing) > 3 else ""
             issues.append(("danger", f"{len(missing)} Quelle(n) nicht gefunden: " + ", ".join(missing[:3]) + more))
+        for root in {utils.unc_root(s) for s, st in states.items() if st == "unreachable"} - {None}:
+            issues.append(("danger", utils.unavailable_reason(root)))
         seen = {}
         for s in sources:
             n = utils.source_name(s).lower()
@@ -686,10 +701,30 @@ class BackupApp(ctk.CTk):
             W.info(self, "Kein Ziel", "Wähle zuerst einen Zielordner für das Backup.", "warning")
             self.show_page("sources")
             return False
-        if not utils.drive_available(prof["target"]):
-            W.info(self, "Ziel nicht erreichbar", f"Das Laufwerk {utils.drive_of(prof['target'])} ist nicht verbunden. "
-                                                  "Bitte die Festplatte anschließen und erneut versuchen.", "error")
+        # Netzwerkfreigaben, die eine Anmeldung brauchen, gleich hier anmelden lassen
+        for path in [prof["target"]] + list(prof["sources"]):
+            state, problem = utils.location_status(path)
+            if state == "login" and not self.network_login(path, problem):
+                return False
+        # 'pending': das NAS antwortet noch nicht (z. B. wacht gerade auf) – der Lauf wartet selbst darauf
+        state, problem = utils.location_status(prof["target"])
+        if state not in ("ok", "pending"):
+            W.info(self, "Ziel nicht erreichbar", problem, "error")
             return False
+        return True
+
+    def network_login(self, path, reason=None):
+        """Fragt Benutzer/Passwort für die Freigabe von `path` ab und meldet sich an. Rückgabe: True bei Erfolg."""
+        share = utils.unc_root(path)
+        creds = W.ask_login(self, share, reason)
+        if not creds:
+            return False
+        error = netlogin.connect(path, *creds)
+        if error:
+            W.info(self, "Anmeldung fehlgeschlagen", error, "error")
+            return False
+        self.toast.show(f"Mit {share} verbunden.", "success")
+        self.broadcast("on_profile_changed")
         return True
 
     def start_backup(self):
@@ -864,6 +899,7 @@ class BackupApp(ctk.CTk):
     def _init_scheduler(self):
         self._reschedule(startup=True)
         self.after(5000, self._scheduler_tick)
+        self.after(20000, self.check_for_updates)
 
     def _reschedule(self, startup=False):
         interval = self.settings["sync_interval"] * 60
@@ -878,10 +914,134 @@ class BackupApp(ctk.CTk):
     def _scheduler_tick(self):
         if self.closed:
             return
-        if self.settings.get("auto_sync") and not self.busy and time.time() >= self._next_sync:
+        if self.settings.get("auto_sync") and not self.busy and not self._updating and time.time() >= self._next_sync:
             self.sync_now(auto=True)
         self._update_sync_status()
+        self.check_for_updates()
         self.after(15000, self._scheduler_tick)
+
+    # ------------------------------------------------------------------ Updates
+    def check_for_updates(self, manual=False):
+        """Sieht auf GitHub nach einer neuen Version – automatisch höchstens einmal täglich, sonst auf Knopfdruck."""
+        if self._update_checking or self._updating or self.closed:
+            return
+        if not manual:
+            last = utils.parse_timestamp(self.settings.get("last_update_check"))
+            if not self.settings.get("update_check") or (
+                    last and (datetime.now() - last).total_seconds() < updater.CHECK_INTERVAL):
+                return
+        self._update_checking = True
+        self.broadcast("on_update_status")
+
+        def work():
+            try:
+                info, error = updater.check(), None
+            except Exception as e:  # kein Internet, GitHub nicht erreichbar, …
+                info, error = None, e
+            self.post(self._update_checked, info, error, manual)
+
+        threading.Thread(target=work, name="update-pruefung", daemon=True).start()
+
+    def _update_checked(self, info, error, manual):
+        self._update_checking = False
+        if error is None:
+            self.settings["last_update_check"] = datetime.now().isoformat(timespec="seconds")
+            self._save_settings()
+            self.update_info = info
+        else:
+            logging.info(f"Update-Prüfung fehlgeschlagen: {error}")
+        self.broadcast("on_update_status")
+        if error is not None:
+            if manual:
+                W.info(self, "Update-Prüfung fehlgeschlagen", f"GitHub ist gerade nicht erreichbar ({error}).", "warning")
+            return
+        if info is None:
+            if manual:
+                self.toast.show(f"Du hast bereits die neueste Version ({version.VERSION}).", "success")
+            return
+        logging.info(f"Neue Version verfügbar: {info.version} (installiert: {version.VERSION})")
+        if not manual and info.version == self.settings.get("skipped_version"):
+            return
+        if not manual and self.state() in ("withdrawn", "iconic"):
+            self._offer_update_on_show = True
+            self.tray.notify(f"Version {info.version} ist verfügbar. Ein Klick auf das Symbol öffnet den Backup "
+                             f"Manager, dort lässt sie sich mit einem Klick installieren.", "Update verfügbar")
+            return
+        self.offer_update()
+
+    def offer_update(self):
+        info = self.update_info
+        if not info or self._updating:
+            return
+        notes = [part for line in info.notes.splitlines() for part in (textwrap.wrap(line, 90) or [""])][:60]
+        if not updater.can_self_update():
+            if W.confirm(self, f"Version {info.version} ist verfügbar",
+                         f"Du nutzt Version {version.VERSION}. Diese Installation ist portabel – lade die neue Version "
+                         f"bitte von der Release-Seite.", "Release-Seite öffnen", kind="info", details=notes or None,
+                         cancel_text="Später"):
+                webbrowser.open(info.page_url)
+            return
+        ok, skip = W.confirm(self, f"Version {info.version} ist verfügbar",
+                             f"Du nutzt Version {version.VERSION}. Das Update wird heruntergeladen, auf Echtheit geprüft "
+                             f"und installiert; danach startet der Backup Manager neu. Profile, Einstellungen und "
+                             f"Snapshots bleiben erhalten.", "Jetzt aktualisieren", kind="info",
+                             details=notes or None, checkbox="Diese Version überspringen", cancel_text="Später")
+        if ok:
+            self.install_update()
+        elif skip:
+            self.settings["skipped_version"] = info.version
+            self._save_settings()
+
+    def install_update(self):
+        info = self.update_info
+        if not info or self._updating:
+            return
+        if self.busy:
+            W.info(self, "Gerade läuft ein Vorgang", "Das Update lässt sich installieren, sobald er fertig ist.", "info")
+            return
+        self._updating = True
+        self.broadcast("on_update_status")
+        self.toast.show(f"Version {info.version} wird heruntergeladen …", "info", 600000)
+        shown = [-1]
+
+        def progress(done, total):
+            step = done * 10 // total if total else 0
+            if step != shown[0]:
+                shown[0] = step
+                self.post(self.toast.show, f"Version {info.version} wird heruntergeladen … {step * 10} %", "info", 600000)
+
+        def work():
+            try:
+                path, error = updater.download(info, progress), None
+            except Exception as e:
+                path, error = None, e
+            self.post(self._update_downloaded, path, error)
+
+        threading.Thread(target=work, name="update-download", daemon=True).start()
+
+    def _update_downloaded(self, path, error):
+        if error is None and self.busy:  # inzwischen hat eine Synchronisierung begonnen – abwarten
+            self.after(2000, lambda: self._update_downloaded(path, None))
+            return
+        if error is None:
+            try:
+                logging.info(f"Update auf Version {self.update_info.version} wird installiert …")
+                updater.start_install(path)
+            except OSError as e:
+                error = e
+        if error is not None:
+            self._updating = False
+            self.toast.hide()
+            self.broadcast("on_update_status")
+            logging.error(f"Update fehlgeschlagen: {error}")
+            if W.confirm(self, "Update fehlgeschlagen", f"{error}\n\nDu kannst die neue Version auch selbst von der "
+                         f"Release-Seite herunterladen.", "Release-Seite öffnen", kind="error"):
+                webbrowser.open(self.update_info.page_url if self.update_info else updater.RELEASES_URL)
+            return
+        self.show_window()
+        self.toast.show("Das Update wird installiert – der Backup Manager startet gleich neu.", "info", 60000)
+        self._closing = True
+        self.after(1500, self.destroy)
 
     def next_sync_time(self):
         return datetime.fromtimestamp(self._next_sync) if self.settings.get("auto_sync") else None
@@ -937,13 +1097,22 @@ class BackupApp(ctk.CTk):
             self.after(1000, self._run_next_sync)
             return
         while self._sync_queue:
-            name = self._sync_queue.pop(0)
+            name = self._sync_queue[0]
             prof = self.profiles.get(name)
             if not prof:
+                self._sync_queue.pop(0)
                 continue
-            if not utils.drive_available(prof["target"]):
-                logging.info(f"Synchronisierung: „{name}“ übersprungen – Laufwerk {utils.drive_of(prof['target'])} "
-                             f"ist nicht verbunden.")
+            state, problem = utils.location_status(prof["target"], wait=0)
+            if state == "pending":
+                # NAS antwortet noch nicht – ohne das Fenster zu blockieren bis zu NET_WAIT Sekunden abwarten
+                since = self._sync_wait_since.setdefault(name, time.monotonic())
+                if time.monotonic() - since < utils.NET_WAIT:
+                    self.after(500, self._run_next_sync)
+                    return
+            self._sync_queue.pop(0)
+            self._sync_wait_since.pop(name, None)
+            if problem:
+                logging.info(f"Synchronisierung: „{name}“ übersprungen – {problem}")
                 self._sync_summary.append((name, None))
                 continue
             self._start_profile_backup(name, show_dashboard=False)

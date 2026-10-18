@@ -16,7 +16,7 @@ Kostenlos und quelloffen (MIT-Lizenz) · von [Firat Öztürk](https://konklave.i
 ---
 
 Der Backup Manager sichert deine Ordner auf Knopfdruck — oder automatisch im Hintergrund — auf eine externe
-Festplatte oder ein anderes Laufwerk. Bevor eine Datei im Ziel überschrieben wird, sichert er die alte Version
+Festplatte, ein anderes Laufwerk oder ein NAS im Heimnetz. Bevor eine Datei im Ziel überschrieben wird, sichert er die alte Version
 als **Snapshot**. So lässt sich jeder einzelne Backup-Lauf später komplett zurücksetzen, und jede frühere
 Dateiversion kann gezielt wiederhergestellt werden — ganz ohne Cloud, ohne Abo, ohne Datenabfluss nach außen.
 
@@ -47,11 +47,22 @@ Dateiversion kann gezielt wiederhergestellt werden — ganz ohne Cloud, ohne Abo
   (`.git`, `node_modules`, `*.tmp`, …) und HDD-Modus (serielles statt paralleles Kopieren für klassische Platten).
 - **Automatische Synchronisierung** – läuft optional im Infobereich der Taskleiste und sichert alle dafür
   eingeschalteten Profile in einstellbarem Abstand (15 Min. bis 4 Std.), auch bei geschlossenem Fenster.
+- **NAS & Netzwerkfreigaben** – Ziel oder Quelle darf auch eine Freigabe sein (`\\NAS\Backup`,
+  `\\192.168.178.20\Backup` oder Netzlaufwerk `Z:`) – getestet für die gängigen Systeme: Synology, QNAP,
+  FRITZ!Box, TrueNAS, Unraid, OpenMediaVault, Samba und Windows-Freigaben.
+  - Anmeldung direkt im Programm; das Passwort verwahrt nur Windows (Anmeldeinformationsverwaltung).
+  - Ein ausgeschaltetes NAS lässt das Fenster nicht hängen; ein Backup wartet bis zu einer Minute, bis das NAS
+    aufgewacht ist. Bricht die Verbindung mitten im Lauf ab, wird sauber beendet und beim nächsten Mal fortgesetzt.
+  - Systemordner wie `#snapshot`, `#recycle`, `@eaDir`, `@Recently-Snapshot` oder `.zfs` werden übersprungen.
+  - Verständliche Meldungen für typische Windows-11-Probleme (Gastzugang gesperrt, nur SMB1, falsches Passwort,
+    FAT32-Grenze von 4 GB bei USB-Speicher an der FRITZ!Box).
+- **Updates mit einem Klick** – das Programm sieht einmal täglich nach einer neuen Version, lädt sie auf Wunsch,
+  prüft ihre Echtheit (SHA-256) und installiert sie. Profile, Einstellungen und Snapshots bleiben erhalten.
 - **Autostart** – startet auf Wunsch minimiert mit Windows.
 - **Snapshots abschaltbar** – pro Profil wählbar, falls nur eine reine Kopie ohne Versionierung gewünscht ist.
 - **Helles/dunkles Design**, folgt auf Wunsch automatisch dem Windows-Farbschema.
-- **Läuft komplett lokal** – keine Cloud, kein Netzwerkzugriff außer für die einmalige Installation der
-  Python-Komponenten.
+- **Ohne Cloud** – deine Daten verlassen nie dein Netz. Ins Internet geht nur die einmalige Installation der
+  Python-Komponenten und die tägliche Update-Prüfung bei GitHub (abschaltbar, überträgt keine Daten über dich).
 
 ## Installation
 
@@ -66,6 +77,10 @@ Dateiversion kann gezielt wiederhergestellt werden — ganz ohne Cloud, ohne Abo
    z. B. `C:\Program Files\BackupManager` für alle Benutzer (dafür fragt Windows nach Administratorrechten).
 
    Ohne Fenster: `BackupManager-Setup.exe /S` (weitere Schalter: `/D=Ordner` `/nodesktop` `/nopin` `/nostart`).
+
+**Update:** Ab Version 2.2 meldet der Backup Manager neue Versionen selbst (Einstellungen → Updates) und installiert
+sie mit einem Klick. Alternativ einfach die neue `BackupManager-Setup-*.exe` starten – sie erkennt die vorhandene
+Installation und tauscht nur die Programmdateien aus; Profile, Einstellungen und Snapshots bleiben erhalten.
 
 ### Variante B — Quellcode (portabel, kein Admin nötig)
 

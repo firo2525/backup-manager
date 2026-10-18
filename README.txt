@@ -1,7 +1,8 @@
-BACKUP MANAGER 2.1.2 – entwickelt von Firat Öztürk · https://konklave.info
+BACKUP MANAGER 2.2.0 – entwickelt von Firat Öztürk · https://konklave.info
 =========================================================================
 
-Sichert Ordner und Dateien inkrementell in ein Ziel (z. B. externe Festplatte).
+Sichert Ordner und Dateien inkrementell in ein Ziel (z. B. externe Festplatte
+oder ein NAS im Netzwerk: \\NAS\Backup bzw. ein Netzlaufwerk wie Z:).
 Bevor eine Datei im Ziel überschrieben wird, wird die alte Version als Snapshot
 aufbewahrt – jeder Lauf lässt sich später zurücksetzen. Auf Wunsch startet das
 Programm mit Windows, läuft im Infobereich der Taskleiste und synchronisiert
@@ -11,7 +12,7 @@ regelmäßig automatisch.
 INSTALLATION
 ------------
 Variante A – Installationsprogramm (empfohlen, auch für andere PCs)
-  dist\BackupManager-Setup-2.1.2.exe starten.
+  dist\BackupManager-Setup-2.2.0.exe starten.
   - Installiert standardmäßig pro Benutzer nach
     %LOCALAPPDATA%\Programs\BackupManager - dafür sind KEINE Administrator-
     rechte nötig. Über "Ändern..." lässt sich auch ein anderer Ordner wählen,
@@ -24,7 +25,7 @@ Variante A – Installationsprogramm (empfohlen, auch für andere PCs)
     versucht, das Programm an die Taskleiste anzuheften. Windows 11 erlaubt das
     Programmen nicht – dann zeigt der Installer, wie es per Rechtsklick geht.
   - Trägt sich unter Einstellungen → Apps ein (Deinstallation dort möglich).
-  - Ohne Fenster: BackupManager-Setup-2.1.2.exe /S   (weitere Optionen:
+  - Ohne Fenster: BackupManager-Setup-2.2.0.exe /S   (weitere Optionen:
     /D=Ordner  /nodesktop  /nopin  /nostart)
 
 Variante B – portabel (Ordner kopieren)
@@ -32,7 +33,12 @@ Variante B – portabel (Ordner kopieren)
   doppelklicken. Liegt der Ordner an einem geschützten Ort, fragt install.bat
   selbst nach Administratorrechten.
 
-Update / Reparatur: Installer oder install.bat erneut ausführen. Pakete werden
+Update: Ab Version 2.2 meldet das Programm neue Versionen selbst (einmal
+täglich, abschaltbar unter Einstellungen → Updates) und installiert sie mit
+einem Klick – die Echtheit wird per SHA-256-Prüfsumme kontrolliert. Profile,
+Einstellungen und Snapshots bleiben erhalten.
+
+Reparatur: Installer oder install.bat erneut ausführen. Pakete werden
 aktualisiert; eine defekte oder von einem anderen PC stammende Umgebung wird
 automatisch neu erstellt.   install.bat /reset   baut sie komplett neu auf.
 
@@ -55,7 +61,8 @@ STARTEN & HINTERGRUNDBETRIEB
   läuft es unsichtbar im Infobereich (unten rechts neben der Uhr, ggf. hinter
   dem Pfeil ^) und synchronisiert alle dafür eingeschalteten Profile
   automatisch – standardmäßig alle 60 Minuten. Nicht angeschlossene Laufwerke
-  werden übersprungen.
+  und ausgeschaltete NAS werden übersprungen. Braucht eine Netzwerkfreigabe ein
+  Passwort: einmal im Explorer öffnen und „Anmeldedaten speichern“ anhaken.
 - Symbol im Infobereich: Klick = Fenster öffnen; Rechtsklick = Menü mit
   „Jetzt synchronisieren“, „Automatisch synchronisieren“ und „Beenden“.
 - Das X minimiert in den Infobereich (abschaltbar in den Einstellungen).

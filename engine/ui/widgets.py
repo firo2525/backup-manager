@@ -522,6 +522,45 @@ def ask_string(master, title, text="", initial="", ok_text="OK", validate=None):
     return dlg.show()
 
 
+# Kennzeichnung von Quellen, die gerade nicht verfügbar sind (Zustände aus utils.path_state)
+PATH_BADGES = {"missing": ("Nicht gefunden", "danger"), "unreachable": ("Nicht erreichbar", "danger"),
+               "pending": ("Wird geprüft …", "info")}
+
+
+def ask_login(master, share, reason=None):
+    """Anmeldedialog für eine Netzwerkfreigabe. Rückgabe: (benutzer, passwort, merken) oder None."""
+    dlg = Dialog(master, "Am NAS anmelden", width=500)
+    dlg.header("Am NAS anmelden", (reason + "\n\n" if reason else "") +
+               f"Benutzer und Passwort für {share} – z. B. dein Synology- oder QNAP-Konto.", "lock", "primary")
+    user_var, pw_var, remember = tk.StringVar(), tk.StringVar(), tk.BooleanVar(value=True)
+    entries = []
+    for text, var, show in (("Benutzername", user_var, ""), ("Passwort", pw_var, "•")):
+        label(dlg.body, text, 12, color=T.MUTED).pack(anchor="w", pady=(12, 4))
+        e = ctk.CTkEntry(dlg.body, textvariable=var, show=show, height=38, corner_radius=10, font=T.font(13),
+                         fg_color=T.INPUT, border_color=T.BORDER_STRONG, text_color=T.TEXT)
+        e.pack(fill="x")
+        entries.append(e)
+    ctk.CTkCheckBox(dlg.body, text="Anmeldedaten speichern (in Windows, auch für die automatische "
+                                   "Synchronisierung)", variable=remember, font=T.font(12), text_color=T.TEXT,
+                    fg_color=T.PRIMARY, hover_color=T.PRIMARY_HOVER, border_color=T.BORDER_STRONG,
+                    corner_radius=6).pack(anchor="w", pady=(14, 0))
+    err = label(dlg.body, "", 12, color=T.DANGER)
+    err.pack(anchor="w", pady=(6, 0))
+
+    def submit(_e=None):
+        if not user_var.get().strip():
+            err.configure(text="Bitte einen Benutzernamen eingeben.")
+            return
+        dlg.ok((user_var.get().strip(), pw_var.get(), bool(remember.get())))
+
+    dlg.add_button("Anmelden", "primary", submit, "lock")
+    dlg.add_button("Abbrechen", "secondary", dlg.cancel)
+    for e in entries:
+        e.bind("<Return>", submit)
+    dlg.after(120, entries[0].focus_set)
+    return dlg.show()
+
+
 class ListDialog(Dialog):
     """Großer, durchsuchbarer Listen-Dialog (z. B. geänderte Dateien, Fehler, Snapshot-Inhalt)."""
 
