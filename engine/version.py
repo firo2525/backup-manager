@@ -1,6 +1,6 @@
 """Zentrale Programmangaben (von App und Installer genutzt)."""
 APP_NAME = "Backup Manager"
-VERSION = "2.1"
+VERSION = "2.1.1"
 DEVELOPER = "Firat Öztürk"
 WEBSITE = "https://konklave.info"
 WEBSITE_LABEL = "konklave.info"

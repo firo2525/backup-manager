@@ -42,8 +42,10 @@ if exist "%WTEST%" (
     echo  Fuer diesen Ordner werden Administratorrechte benoetigt - Windows fragt gleich nach.
     set "BM_SELF=%~f0"
     set "BM_ARGS=%*"
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$q=[char]34; Start-Process -FilePath $env:ComSpec -ArgumentList ('/c ' + $q + $q + $env:BM_SELF + $q + ' ' + $env:BM_ARGS + $q) -Verb RunAs"
-    exit /b 0
+    rem -Wait: auf das elevierte Fenster warten und dessen Ergebnis uebernehmen (sonst meldet dieses
+    rem Fenster faelschlich sofort Erfolg, waehrend die eigentliche Installation erst noch laeuft).
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$q=[char]34; $p = Start-Process -FilePath $env:ComSpec -ArgumentList ('/c ' + $q + $q + $env:BM_SELF + $q + ' ' + $env:BM_ARGS + $q) -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+    exit /b %ERRORLEVEL%
 )
 set "IS_ADMIN=0"
 net session >nul 2>&1 && set "IS_ADMIN=1"

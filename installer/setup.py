@@ -568,16 +568,59 @@ def run_gui(opts, target, notice=None):
                 opts[key] = bool(var.get())
             self.target = os.path.abspath(self.path.get().strip() or DEFAULT_DIR)
             if not can_write(self.target) and not is_admin():
-                if relaunch_elevated(build_args(opts, self.target, ["/go", "/elevated"])):
-                    self.destroy()
-                    return
-                if W.confirm(self, "Keine Administratorrechte",
-                             f"Für „{self.target}“ werden Administratorrechte benötigt. Stattdessen nur für deinen "
-                             f"Benutzer installieren?", "Für mich installieren", facts=[("Ordner", USER_DIR, None)]):
-                    self.target = USER_DIR
-                else:
-                    return
+                self.request_elevation(build_args(opts, self.target, ["/go", "/elevated"]),
+                                       deny_message=f"Für „{self.target}“ werden Administratorrechte benötigt. "
+                                                    f"Stattdessen nur für deinen Benutzer installieren?",
+                                       deny_action=self._install_for_user)
+                return
             self.start_install()
+
+        def _install_for_user(self):
+            self.target = USER_DIR
+            self.path.delete(0, "end")
+            self.path.insert(0, USER_DIR)
+            self.start_install()
+
+        # ---------------------------------------------------------- Administratorrechte
+        def request_elevation(self, args, deny_message, deny_action):
+            """Fragt im Hintergrund nach Administratorrechten. ShellExecuteW("runas", …) blockiert bis zur
+            Antwort auf den UAC-Dialog – deshalb NICHT im Tk-Hauptthread aufrufen (sonst "Keine Rückmeldung")."""
+            self._deny_message = deny_message
+            self._deny_action = deny_action
+            self.busy = True
+            self.clear()
+            self.title_block("Administratorrechte erforderlich",
+                             "Windows fragt jetzt nach – bitte im Dialog „Ja“ auswählen. Das Fenster bleibt "
+                             "in der Zwischenzeit reagierfähig.", "shield", "primary")
+            spin = ctk.CTkProgressBar(self.body, height=8, corner_radius=4, mode="indeterminate",
+                                      progress_color=T.PRIMARY, fg_color=T.CARD_ALT)
+            spin.pack(fill="x", pady=(22, 0))
+            spin.start()
+            self._elevation_spinner = spin
+
+            def work():
+                ok = relaunch_elevated(args)
+                self.emit("elevated", ok)
+            threading.Thread(target=work, daemon=True).start()
+
+        def _on_elevation_result(self, ok):
+            self.busy = False
+            if hasattr(self, "_elevation_spinner"):
+                self._elevation_spinner.stop()
+            if ok:
+                self.clear()
+                self.title_block("Wird fortgesetzt …", "Die Installation läuft jetzt mit Administratorrechten in "
+                                                        "einem neuen Fenster weiter.", "completed", "success")
+                self.after(1400, self.destroy)
+            else:
+                self.clear()
+                self.title_block("Keine Administratorrechte", self._deny_message, "warning", "warning")
+                buttons = [("Abbrechen", "secondary", self.destroy, None)]
+                if self._deny_action:
+                    buttons.append(("Für mich installieren", "primary", self._deny_action, "download"))
+                else:
+                    buttons[0] = ("Schließen", "secondary", self.destroy, None)
+                self.footer_buttons(*buttons)
 
         # ---------------------------------------------------------- Fortschritt
         def page_progress(self, title):
@@ -655,6 +698,8 @@ def run_gui(opts, target, notice=None):
             elif event == "error":
                 self.busy = False
                 self.page_error(data[0])
+            elif event == "elevated":
+                self._on_elevation_result(data[0])
 
         # ---------------------------------------------------------- Ergebnis
         def page_done(self, result):
@@ -712,8 +757,9 @@ def run_gui(opts, target, notice=None):
         def on_uninstall(self):
             opts["purge"] = bool(self.purge.get())
             if not can_write(self.target) and not is_admin():
-                if relaunch_elevated(build_args(opts, self.target, ["/go", "/elevated"])):
-                    self.destroy()
+                self.request_elevation(build_args(opts, self.target, ["/go", "/elevated"]),
+                                       deny_message=f"Für „{self.target}“ werden Administratorrechte zum Entfernen "
+                                                    f"benötigt.", deny_action=None)
                 return
             self.busy = True
             self.page_progress("Wird entfernt …")
